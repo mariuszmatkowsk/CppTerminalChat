@@ -12,7 +12,7 @@ FetchContent_MakeAvailable(ftxui)
 add_executable(
     client
     client.cpp
-    # Connection.cpp
+    Connection.cpp
 )
 
 target_link_libraries(

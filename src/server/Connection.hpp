@@ -6,6 +6,7 @@
 #include <ostream>
 
 class ConnectionsManager;
+struct MessageHeader;
 
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
@@ -23,6 +24,7 @@ private:
     friend struct std::formatter<ConnectionInfo>;
 
     void do_read();
+    void do_read_body(const MessageHeader& header);
     void do_write();
 
     asio::ip::tcp::socket socket_;

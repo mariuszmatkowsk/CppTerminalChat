@@ -1,7 +1,9 @@
 #include "Connection.hpp"
+#include "../Message.hpp"
 #include "ConnectionsManager.hpp"
 
 #include <asio.hpp>
+#include <asio/completion_condition.hpp>
 #include <print>
 
 Connection::Connection(asio::ip::tcp::socket socket,
@@ -22,21 +24,50 @@ void Connection::stop() {
 }
 
 void Connection::do_read() {
-    auto self{shared_from_this()};
-    socket_.async_read_some(asio::buffer(buffer_), [this, self](
-                                                       asio::error_code ec,
-                                                       std::size_t bytes_read) {
+    auto handle_read = [self = shared_from_this(), this](asio::error_code ec,
+                                                         size_t bytes_read) {
         if (!ec) {
-                std::println("Received {} bytes from: {}", bytes_read,
-                             connection_info_);
-                do_read();
-        } else if (ec == asio::error::eof) {
-            std::println("Connection closed by client: {}", connection_info_);
-
-        } else if (ec != asio::error::operation_aborted) {
-            connections_manager_.stop(shared_from_this());
+            MessageHeader header;
+            if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
+                            header)) {
+                if (header.type == MessageType::Connect) {
+                    std::println(
+                        "Ne connect message, with body_size = {}",
+                        header.body_size);
+                    do_read_body(header);
+                }
+            }
         }
-    });
+    };
+
+    asio::async_read(socket_, asio::buffer(buffer_),
+                     asio::transfer_exactly(MessageHeaderSize), handle_read);
+}
+
+void Connection::do_read_body(const MessageHeader& header) {
+    auto handle_body_read = [&header, self = shared_from_this(),
+                             this](asio::error_code ec, size_t bytes_read) {
+        if (!ec) {
+            if (header.type == MessageType::Connect) {
+                ConnectMessage connect_message;
+                if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
+                                connect_message)) {
+                    std::println("{} want to connect.", connect_message.nick);
+
+                } else {
+                    std::println("Something goes wrong during deserialization of "
+                                 "ConnectMessage");
+                    return;
+                }
+            }
+        } else {
+            std::println("Something goes wrong during read message body");
+        }
+    };
+
+    asio::async_read(socket_, asio::buffer(buffer_),
+                     asio::transfer_exactly(header.body_size),
+                     handle_body_read);
 }
 
 void Connection::do_write() {
