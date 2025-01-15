@@ -18,7 +18,7 @@ add_executable(
 target_link_libraries(
     client
     PRIVATE asio
-    # PRIVATE ftxui::screen
-    # PRIVATE ftxui::dom
-    # PRIVATE ftxui::component
+    PRIVATE ftxui::screen
+    PRIVATE ftxui::dom
+    PRIVATE ftxui::component
 )

@@ -24,7 +24,7 @@ private:
     friend struct std::formatter<ConnectionInfo>;
 
     void do_read();
-    void do_read_body(const MessageHeader& header);
+    void do_read_body(MessageHeader header);
     void do_write();
 
     asio::ip::tcp::socket socket_;
