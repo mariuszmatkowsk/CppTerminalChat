@@ -10,7 +10,7 @@ Connection::Connection(asio::io_context& io_context,
       received_messages_(received_messages) {
 
     socket_.async_connect(*endpoints.begin(), [this](asio::error_code ec) {
-        do_read();
+        do_read_header();
     });
 }
 
@@ -28,7 +28,7 @@ void Connection::send(const Message& msg) {
     socket_.async_send(asio::buffer(*msg_to_send), handle_send);
 }
 
-void Connection::do_read() {
+void Connection::do_read_header() {
     auto handle_read = [this](asio::error_code ec, size_t bytes) {
         if (!ec && bytes == MessageHeaderSize) {
             MessageHeader header;
@@ -65,7 +65,7 @@ void Connection::do_read_body(MessageHeader header) {
         if (!ec) {
             if (bytes_read == header.body_size) {
                 handle_new_message(header.type, bytes_read);
-                do_read();
+                do_read_header();
             }
         }
     };

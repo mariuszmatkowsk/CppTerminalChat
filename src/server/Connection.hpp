@@ -28,10 +28,19 @@ private:
     };
     friend struct std::formatter<ConnectionInfo>;
 
+    using MessageHandler = std::function<void(MessageHeader, size_t)>;
+
     void do_read_header();
     void do_read_body(MessageHeader header);
 
     void broadcast_message(Message msg);
+
+    void setup_dispatcher();
+
+    void handle_connect_message(MessageHeader header, size_t bytes_read);
+    void handle_disconnect_message(MessageHeader header, size_t bytes_read);
+    void handle_text_message(MessageHeader header, size_t bytes_read);
+    void handle_private_message(MessageHeader header, size_t bytes_read);
 
     asio::io_context& io_context_;
     asio::ip::tcp::socket socket_;
@@ -40,6 +49,7 @@ private:
     ConnectionInfo connection_info_;
 
     std::array<uint8_t, 1024> buffer_;
+    std::unordered_map<MessageType, MessageHandler> dispatcher_;
 };
 
 using ConnectionPtr = std::shared_ptr<Connection>;

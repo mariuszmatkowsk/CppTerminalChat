@@ -16,7 +16,7 @@ public:
     void send(const Message& msg);
 
 private:
-    void do_read();
+    void do_read_header();
     void do_read_body(MessageHeader header);
     void handle_new_message(MessageType type, size_t message_length);
 
