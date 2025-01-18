@@ -13,6 +13,7 @@ add_executable(
     client
     client.cpp
     Connection.cpp
+    ../Message.cpp
 )
 
 target_link_libraries(

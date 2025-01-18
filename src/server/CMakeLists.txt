@@ -3,6 +3,7 @@ add_executable(
     server.cpp
     ChatServer.cpp
     Connection.cpp
+    ../Message.cpp
 )
 
 target_link_libraries(

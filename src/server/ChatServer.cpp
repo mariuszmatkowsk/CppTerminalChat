@@ -22,10 +22,11 @@ void ChatServer::start() {
 }
 
 void ChatServer::do_accept() {
-    auto handle_accept = [this](asio::error_code ec, asio::ip::tcp::socket socket) {
+    auto handle_accept = [this](asio::error_code ec,
+                                asio::ip::tcp::socket socket) {
         if (!ec) {
             connections_manager_.start(std::make_shared<Connection>(
-                std::move(socket), connections_manager_));
+                io_context_, std::move(socket), connections_manager_));
         } else {
             std::println("New connection was not accepted");
         }
