@@ -17,6 +17,7 @@ namespace command {
     constexpr const char* Connect{"connect"};
     constexpr const char* Disconnect{"disconnect"};
     constexpr const char* PrivateMsg{"private"};
+    constexpr const char* Help{"help"};
 } // namespace command
 
 struct ChatMessage {
@@ -42,6 +43,7 @@ void handle_new_input(
         std::vector<std::string>& chat_users,
         std::string input_text,
         bool& is_connected,
+        bool& show_help,
         std::string& nick) {
     if (input_text.starts_with('/')) {
         auto [command, rest] = parse_command(input_text);
@@ -55,6 +57,9 @@ void handle_new_input(
             chat_users.clear();
             nick.clear();;
             is_connected = false;
+            show_help = false;
+        } else if (command == command::Help) {
+            show_help = true;
         } else if (command == command::PrivateMsg && is_connected) {
             auto first_space_index = rest.find_first_of(' '); 
             if (first_space_index == std::string::npos) {
@@ -66,19 +71,21 @@ void handle_new_input(
                 .message =
                     rest.substr(first_space_index + 1, rest.size() - first_space_index)
             });
+            show_help = false;
         } else {
             // TODO: not supported command should be ignored ????
         }
     } else {
         // TODO: handle message to all clients connected to chat
         if (is_connected) {
+            show_help = false;
             chat_messages.emplace_back(nick, input_text);
             connection.send(
                 TextMessage{
                     .from = nick,
                     .message = std::move(input_text)
             });
-        }            
+        }
     }
 }
 
@@ -91,9 +98,11 @@ int main(int argc, char** argv) {
     std::queue<Message> received_messages;
     std::vector<std::string> chat_users;
 
-    Connection connection{io_context, std::move(endpoints), received_messages};
     bool is_connected{false};
+    bool show_help{false};
     std::string nick{};
+
+    Connection connection{io_context, std::move(endpoints), received_messages};
 
     asio::steady_timer pool_messages_timer(io_context);
 
@@ -106,26 +115,46 @@ int main(int argc, char** argv) {
     auto input_message =
         ftxui::Input(&input_text, "Type a message...") | ftxui::CatchEvent([&](ftxui::Event event) {
             if (event == ftxui::Event::Return && !input_text.empty()) {
-                handle_new_input(connection, chat_messages, chat_users, std::move(input_text), is_connected, nick);
+                handle_new_input(connection, chat_messages, chat_users, std::move(input_text), is_connected, show_help, nick);
                 input_text.clear();
+                return true;
+            } else if (event == ftxui::Event::Escape) {
+                show_help = false;
                 return true;
             }
             return false;
         });
     
     auto chat = ftxui::Renderer([&] {
-        ftxui::Elements elements; 
-        for (const auto& [message_nick, message] : chat_messages) {
-            if (message_nick == nick) {
-                elements.push_back(
-                    ftxui::text("You: " + message) | ftxui::border | ftxui::align_right | ftxui::color(ftxui::Color::Green));
-            } else {
-                elements.push_back(ftxui::text(std::format("{}: ", message_nick) + message) | ftxui::border);
+        if (!is_connected || show_help) {
+            auto info_msg = is_connected ? 
+                ftxui::text("You are now connected!!!") | ftxui::color(ftxui::Color::Green) :
+                ftxui::text("You are not connected to the server!!!") | ftxui::color(ftxui::Color::Red); 
+
+            return ftxui::window(ftxui::text("Help:") | ftxui::bold | ftxui::center,
+                ftxui::vbox(
+                    info_msg,
+                    ftxui::emptyElement(),
+                    ftxui::text("Usage:") | ftxui::bold,
+                    ftxui::text("       /connect <nick> - connect to the chat, set your nick"),
+                    ftxui::text("       /disconnect     - leave the chat"),
+                    ftxui::text("       /private <nick> - send private message to other connected user"),
+                    ftxui::text("       /help           - show help")
+            ));
+        } else {
+            ftxui::Elements elements; 
+            for (const auto& [message_nick, message] : chat_messages) {
+                if (message_nick == nick) {
+                    elements.push_back(
+                        ftxui::text("You: " + message) | ftxui::border | ftxui::align_right | ftxui::color(ftxui::Color::Green));
+                } else {
+                    elements.push_back(ftxui::text(std::format("{}: ", message_nick) + message) | ftxui::border);
+                }
             }
+            return ftxui::window(ftxui::text("Chat messages:") | ftxui::bold | ftxui::center,
+                ftxui::vbox(std::move(elements)) 
+            );
         }
-        return ftxui::window(ftxui::text("Chat messages:") | ftxui::bold | ftxui::center,
-            ftxui::vbox(std::move(elements)) 
-        );
     });
 
     auto users = ftxui::Renderer([&] {
@@ -140,7 +169,14 @@ int main(int argc, char** argv) {
 
     auto send_button = ftxui::Button("Send", [&] {
         if (!input_text.empty()) {
-            handle_new_input(connection, chat_messages, chat_users, std::move(input_text), is_connected, nick);
+            handle_new_input(
+                connection,
+                chat_messages,
+                chat_users,
+                std::move(input_text),
+                is_connected,
+                show_help,
+                nick);
             input_text.clear();
         }
     });

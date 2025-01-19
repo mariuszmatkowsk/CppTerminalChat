@@ -44,7 +44,7 @@ void Connection::stop() {
 void Connection::do_read_header() {
     auto handle_read_header = [self = shared_from_this(),
                                this](asio::error_code ec, size_t bytes_read) {
-        if (!ec) {
+        if (!ec && bytes_read == MessageHeaderSize) {
             MessageHeader header{};
             if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
                             header)) {
@@ -54,6 +54,8 @@ void Connection::do_read_header() {
             } else {
                 logger::error("could not deserialize MessageHeader");
             }
+        } else {
+            // TODO: handle error during header read
         }
     };
 
@@ -65,7 +67,7 @@ void Connection::do_read_header() {
 void Connection::do_read_body(MessageHeader header) {
     auto handle_body_read = [header, self = shared_from_this(),
                              this](asio::error_code ec, size_t bytes_read) {
-        if (!ec) {
+        if (!ec && bytes_read == header.body_size) {
             const auto handler = dispatcher_.find(header.type);
             if (handler != std::end(dispatcher_)) {
                 handler->second(header, bytes_read);
@@ -154,7 +156,7 @@ void Connection::handle_disconnect_message(MessageHeader header,
     DisconnectMessage disconnect_message;
     if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
                     disconnect_message)) {
-        std::println("New DisconnectMessage from: {}", disconnect_message.nick);
+        connections_manager_.unset_nick(shared_from_this());
         broadcast_message(disconnect_message);
     } else {
         logger::error("could not deserialize DisconnectMessage");
@@ -165,7 +167,6 @@ void Connection::handle_text_message(MessageHeader header, size_t bytes_read) {
     TextMessage text_message;
     if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
                     text_message)) {
-        // TODO: unset nick
         broadcast_message(text_message);
     } else {
         logger::error("could not deserialize TextMessage");
