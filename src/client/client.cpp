@@ -3,6 +3,7 @@
 
 #include <asio.hpp>
 #include <asio/error_code.hpp>
+#include <asio/executor_work_guard.hpp>
 #include <chrono>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -42,32 +43,27 @@ void handle_new_input(
         std::vector<ChatMessage>& chat_messages,
         std::vector<std::string>& chat_users,
         std::string input_text,
-        bool& is_connected,
-        bool& show_help,
-        std::string& nick) {
+        bool& show_help) {
     if (input_text.starts_with('/')) {
         auto [command, rest] = parse_command(input_text);
-        if (command == command::Connect && !is_connected) {
-            nick = rest;
-            is_connected = true;
+        if (command == command::Connect && !connection.is_connected()) {
+            const auto& nick = rest;
             chat_users.push_back(nick);
-            connection.send(ConnectMessage{.nick = std::move(rest)});
-        } else if (command == command::Disconnect && is_connected) {
-            connection.send(DisconnectMessage{.nick = std::move(nick)});
+            connection.connect(nick);
+        } else if (command == command::Disconnect && connection.is_connected()) {
+            connection.disconnect();
             chat_users.clear();
-            nick.clear();;
-            is_connected = false;
             show_help = false;
         } else if (command == command::Help) {
             show_help = true;
-        } else if (command == command::PrivateMsg && is_connected) {
+        } else if (command == command::PrivateMsg && connection.is_connected()) {
             auto first_space_index = rest.find_first_of(' '); 
             if (first_space_index == std::string::npos) {
                 // TODO: empty message, ???
             }
             auto to = rest.substr(0, first_space_index);
             connection.send(PrivateMessage{
-                .from = nick, .to = std::move(to),
+                .from = connection.get_nick(), .to = std::move(to),
                 .message =
                     rest.substr(first_space_index + 1, rest.size() - first_space_index)
             });
@@ -77,12 +73,12 @@ void handle_new_input(
         }
     } else {
         // TODO: handle message to all clients connected to chat
-        if (is_connected) {
+        if (connection.is_connected()) {
             show_help = false;
-            chat_messages.emplace_back(nick, input_text);
+            chat_messages.emplace_back(connection.get_nick(), input_text);
             connection.send(
                 TextMessage{
-                    .from = nick,
+                    .from = connection.get_nick(),
                     .message = std::move(input_text)
             });
         }
@@ -98,11 +94,10 @@ int main(int argc, char** argv) {
     std::queue<Message> received_messages;
     std::vector<std::string> chat_users;
 
-    bool is_connected{false};
     bool show_help{false};
-    std::string nick{};
 
     Connection connection{io_context, std::move(endpoints), received_messages};
+    auto work_guard = asio::make_work_guard(io_context);
 
     asio::steady_timer pool_messages_timer(io_context);
 
@@ -115,7 +110,7 @@ int main(int argc, char** argv) {
     auto input_message =
         ftxui::Input(&input_text, "Type a message...") | ftxui::CatchEvent([&](ftxui::Event event) {
             if (event == ftxui::Event::Return && !input_text.empty()) {
-                handle_new_input(connection, chat_messages, chat_users, std::move(input_text), is_connected, show_help, nick);
+                handle_new_input(connection, chat_messages, chat_users, std::move(input_text), show_help);
                 input_text.clear();
                 return true;
             } else if (event == ftxui::Event::Escape) {
@@ -126,8 +121,8 @@ int main(int argc, char** argv) {
         });
     
     auto chat = ftxui::Renderer([&] {
-        if (!is_connected || show_help) {
-            auto info_msg = is_connected ? 
+        if (!connection.is_connected() || show_help) {
+            auto info_msg = connection.is_connected() ?
                 ftxui::text("You are now connected!!!") | ftxui::color(ftxui::Color::Green) :
                 ftxui::text("You are not connected to the server!!!") | ftxui::color(ftxui::Color::Red); 
 
@@ -144,7 +139,7 @@ int main(int argc, char** argv) {
         } else {
             ftxui::Elements elements; 
             for (const auto& [message_nick, message] : chat_messages) {
-                if (message_nick == nick) {
+                if (message_nick == connection.get_nick()) {
                     elements.push_back(
                         ftxui::text("You: " + message) | ftxui::border | ftxui::align_right | ftxui::color(ftxui::Color::Green));
                 } else {
@@ -174,9 +169,7 @@ int main(int argc, char** argv) {
                 chat_messages,
                 chat_users,
                 std::move(input_text),
-                is_connected,
-                show_help,
-                nick);
+                show_help);
             input_text.clear();
         }
     });
@@ -211,7 +204,7 @@ int main(int argc, char** argv) {
 
     std::function<void(asio::error_code)> handle_pool_messages = [&] (asio::error_code ec) {
         if (!ec) {
-            while (is_connected && !received_messages.empty()) {
+            while (connection.is_connected() && !received_messages.empty()) {
                 Message message = std::move(received_messages.front());
                 received_messages.pop();
 

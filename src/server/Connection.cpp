@@ -105,6 +105,7 @@ void Connection::setup_dispatcher() {
     dispatcher_.insert(
         {MessageType::Connect,
         [this](MessageHeader header, size_t bytes_read) {
+             logger::info("New connect message");
              handle_connect_message(header, bytes_read);
          }});
     dispatcher_.insert(

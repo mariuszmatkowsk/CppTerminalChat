@@ -6,11 +6,45 @@
 Connection::Connection(asio::io_context& io_context,
                        asio::ip::tcp::resolver::results_type endpoints,
                        std::queue<Message>& received_messages)
-    : io_context_(io_context), socket_(io_context_),
-      received_messages_(received_messages) {
+    : io_context_(io_context), endpoints_(std::move(endpoints)), socket_(io_context_),
+      received_messages_(received_messages), is_connected_(false), nick_(std::nullopt) {
+}
 
-    socket_.async_connect(*endpoints.begin(),
-                          [this](asio::error_code ec) { do_read_header(); });
+void Connection::connect(std::string nick) {
+    socket_.async_connect(*endpoints_.begin(), [this, nick](
+                                                   asio::error_code ec) {
+        if (!ec) {
+            const auto msg_to_send = std::make_shared<SerializedMessage>(
+                serialize(Message{ConnectMessage{.nick = nick}}));
+
+            auto handle_send = [msg_to_send, this, nick](asio::error_code ec,
+                                                   size_t bytes) {
+                if (!ec) {
+                    is_connected_ = true;
+                    nick_ = nick;
+                    do_read_header();
+                }
+            };
+
+            socket_.async_send(asio::buffer(*msg_to_send), handle_send);
+        } else {
+            is_connected_ = false;
+        }
+    });
+}
+
+void Connection::disconnect() {
+    // TODO: handle disconnect
+    const auto msg_to_send = std::make_shared<SerializedMessage>(
+        serialize(Message{DisconnectMessage{.nick = *nick_}}));
+
+    socket_.async_send(asio::buffer(*msg_to_send),
+                       [msg_to_send, this](asio::error_code ec, size_t bytes) {
+                           if (!ec) {
+                               is_connected_ = false;
+                               nick_ = std::nullopt;
+                           }
+                       });
 }
 
 void Connection::send(const Message& msg) {
@@ -84,4 +118,12 @@ void Connection::handle_new_message(MessageType type, size_t message_length) {
 
 void Connection::close() {
     socket_.close();
+}
+
+bool Connection::is_connected() const {
+    return is_connected_;
+}
+
+const std::string& Connection::get_nick() const {
+    return *nick_;
 }
