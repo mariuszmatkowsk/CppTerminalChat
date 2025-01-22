@@ -6,31 +6,32 @@
 Connection::Connection(asio::io_context& io_context,
                        asio::ip::tcp::resolver::results_type endpoints,
                        std::queue<Message>& received_messages)
-    : io_context_(io_context), endpoints_(std::move(endpoints)), socket_(io_context_),
-      received_messages_(received_messages), is_connected_(false), nick_(std::nullopt) {
+    : io_context_(io_context), endpoints_(std::move(endpoints)),
+      socket_(io_context_), received_messages_(received_messages),
+      is_connected_(false), nick_(std::nullopt) {
 }
 
 void Connection::connect(std::string nick) {
-    socket_.async_connect(*endpoints_.begin(), [this, nick](
-                                                   asio::error_code ec) {
-        if (!ec) {
-            const auto msg_to_send = std::make_shared<SerializedMessage>(
-                serialize(Message{ConnectMessage{.nick = nick}}));
+    socket_.async_connect(
+        *endpoints_.begin(), [this, nick](asio::error_code ec) {
+            if (!ec) {
+                const auto msg_to_send = std::make_shared<SerializedMessage>(
+                    serialize(Message{ConnectMessage{.nick = nick}}));
 
-            auto handle_send = [msg_to_send, this, nick](asio::error_code ec,
-                                                   size_t bytes) {
-                if (!ec) {
-                    is_connected_ = true;
-                    nick_ = nick;
-                    do_read_header();
-                }
-            };
+                auto handle_send = [msg_to_send, this,
+                                    nick](asio::error_code ec, size_t bytes) {
+                    if (!ec) {
+                        is_connected_ = true;
+                        nick_ = nick;
+                        do_read_header();
+                    }
+                };
 
-            socket_.async_send(asio::buffer(*msg_to_send), handle_send);
-        } else {
-            is_connected_ = false;
-        }
-    });
+                socket_.async_send(asio::buffer(*msg_to_send), handle_send);
+            } else {
+                is_connected_ = false;
+            }
+        });
 }
 
 void Connection::disconnect() {

@@ -103,26 +103,22 @@ void Connection::broadcast_message(Message msg) {
 
 void Connection::setup_dispatcher() {
     dispatcher_.insert(
-        {MessageType::Connect,
-        [this](MessageHeader header, size_t bytes_read) {
+        {MessageType::Connect, [this](MessageHeader header, size_t bytes_read) {
              logger::info("New connect message");
              handle_connect_message(header, bytes_read);
          }});
+    dispatcher_.insert({MessageType::Disconnect,
+                        [this](MessageHeader header, size_t bytes_read) {
+                            handle_disconnect_message(header, bytes_read);
+                        }});
     dispatcher_.insert(
-        {MessageType::Disconnect,
-        [this](MessageHeader header, size_t bytes_read) {
-            handle_disconnect_message(header, bytes_read);
-        }});
-    dispatcher_.insert(
-        {MessageType::Text,
-        [this](MessageHeader header, size_t bytes_read) {
-            handle_text_message(header, bytes_read);
-        }});
-    dispatcher_.insert(
-        {MessageType::PrivateMessage,
-        [this](MessageHeader header, size_t bytes_read) {
-            handle_private_message(header, bytes_read);
-        }});
+        {MessageType::Text, [this](MessageHeader header, size_t bytes_read) {
+             handle_text_message(header, bytes_read);
+         }});
+    dispatcher_.insert({MessageType::PrivateMessage,
+                        [this](MessageHeader header, size_t bytes_read) {
+                            handle_private_message(header, bytes_read);
+                        }});
 }
 
 void Connection::handle_connect_message(MessageHeader header,
