@@ -5,6 +5,7 @@
 #include <array>
 #include <asio.hpp>
 #include <queue>
+#include <optional>
 
 class Connection {
 public:
@@ -12,12 +13,23 @@ public:
                asio::ip::tcp::resolver::results_type endpoints,
                std::queue<Message>& received_messages);
 
-    void connect(std::string nick);
-    void disconnect();
+    Connection(const Connection&) = delete;
+    Connection& operator=(const Connection&) = delete;
+    Connection(Connection&&) = delete;
+    Connection& operator=(Connection&&) = delete;
+    ~Connection() {
+        socket_.cancel();
+        socket_.close();
+    }
+
+    void do_connect();
+    void join(std::string nick);
+    void leave();
     void close();
     void send(const Message& msg);
     bool is_connected() const;
     const std::string& get_nick() const;
+    bool is_server_online() const;
 
 private:
     void do_read_header();
@@ -31,10 +43,9 @@ private:
                         msg)) {
             received_messages_.push(std::move(msg));
         } else {
-            // TODO: improve error handling
             received_messages_.push(TextMessage{
                 .from = "Internal Client",
-                .message = {"Something goes wrong during deserialization"}});
+                .message = {"Something goes wrong during deserialization of body message"}});
         }
     }
 
@@ -42,7 +53,9 @@ private:
     asio::ip::tcp::resolver::results_type endpoints_;
     asio::ip::tcp::socket socket_;
     std::queue<Message>& received_messages_;
+    asio::steady_timer connect_timer_;
     bool is_connected_;
+    bool is_server_online_;
     std::optional<std::string> nick_;
 
     std::array<uint8_t, 1024> buffer_;

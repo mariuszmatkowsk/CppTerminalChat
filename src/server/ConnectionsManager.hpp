@@ -31,10 +31,13 @@ public:
         }
     }
 
-    void unset_nick(ConnectionPtr connection) {
+    std::optional<std::string> unset_nick(ConnectionPtr connection) {
         if (auto it = connections_.find(connection); it != std::end(connections_)) {
+            auto nick = std::move(connections_[connection]);
             connections_[connection].clear();
+            return nick;
         }
+        return std::nullopt;
     }
 
     Connections& get_connections() {

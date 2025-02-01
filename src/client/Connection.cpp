@@ -1,41 +1,56 @@
 #include "Connection.hpp"
 #include "../Message.hpp"
 
+#include <asio/error.hpp>
 #include <print>
+
+using namespace std::chrono_literals;
 
 Connection::Connection(asio::io_context& io_context,
                        asio::ip::tcp::resolver::results_type endpoints,
                        std::queue<Message>& received_messages)
     : io_context_(io_context), endpoints_(std::move(endpoints)),
       socket_(io_context_), received_messages_(received_messages),
-      is_connected_(false), nick_(std::nullopt) {
+      connect_timer_(io_context_), is_connected_(false),
+      is_server_online_(false), nick_(std::nullopt) {
+    do_connect();
 }
 
-void Connection::connect(std::string nick) {
-    socket_.async_connect(
-        *endpoints_.begin(), [this, nick](asio::error_code ec) {
-            if (!ec) {
-                const auto msg_to_send = std::make_shared<SerializedMessage>(
-                    serialize(Message{ConnectMessage{.nick = nick}}));
-
-                auto handle_send = [msg_to_send, this,
-                                    nick](asio::error_code ec, size_t bytes) {
-                    if (!ec) {
-                        is_connected_ = true;
-                        nick_ = nick;
-                        do_read_header();
-                    }
-                };
-
-                socket_.async_send(asio::buffer(*msg_to_send), handle_send);
-            } else {
-                is_connected_ = false;
-            }
-        });
+void Connection::do_connect() {
+    socket_.async_connect(*endpoints_.begin(), [this](asio::error_code ec) {
+        if (!ec) {
+            is_server_online_ = true;
+        } else {
+            connect_timer_.expires_after(1s);
+            connect_timer_.async_wait([this](asio::error_code ec) {
+                if (!ec) {
+                    do_connect();
+                }
+            });
+        }
+    });
 }
 
-void Connection::disconnect() {
-    // TODO: handle disconnect
+void Connection::join(std::string nick) {
+    const auto msg_to_send = std::make_shared<SerializedMessage>(
+        serialize(Message{ConnectMessage{.nick = nick}}));
+
+    auto handle_send = [msg_to_send, this, nick](asio::error_code ec,
+                                                 size_t bytes) {
+        if (!ec) {
+            is_connected_ = true;
+            nick_ = nick;
+            do_read_header();
+        } else if (ec == asio::error::broken_pipe ||
+                   ec == asio::error::connection_reset) {
+            is_server_online_ = false;
+        }
+    };
+
+    socket_.async_send(asio::buffer(*msg_to_send), handle_send);
+}
+
+void Connection::leave() {
     const auto msg_to_send = std::make_shared<SerializedMessage>(
         serialize(Message{DisconnectMessage{.nick = *nick_}}));
 
@@ -44,6 +59,9 @@ void Connection::disconnect() {
                            if (!ec) {
                                is_connected_ = false;
                                nick_ = std::nullopt;
+                           } else if (ec == asio::error::broken_pipe ||
+                                      ec == asio::error::connection_reset) {
+                               is_server_online_ = false;
                            }
                        });
 }
@@ -54,8 +72,9 @@ void Connection::send(const Message& msg) {
         std::make_shared<SerializedMessage>(std::move(serialized_msg));
 
     auto handle_send = [msg_to_send, this](asio::error_code ec, size_t bytes) {
-        if (ec) {
-            // TODO: handle error during send messae
+        if (ec == asio::error::broken_pipe ||
+            ec == asio::error::connection_reset) {
+            is_server_online_ = false;
         }
     };
 
@@ -72,8 +91,12 @@ void Connection::do_read_header() {
                             header)) {
                 do_read_body(std::move(header));
             } else {
-                // TODO: handle error during deserialization header
+                received_messages_.push(TextMessage{
+                    .from = "Internal Client",
+                    .message = {"Could not deserialize header message."}});
             }
+        } else if (ec == asio::error::eof) {
+            is_server_online_ = false;
         }
     };
 
@@ -89,6 +112,8 @@ void Connection::do_read_body(MessageHeader header) {
                 handle_new_message(header.type, bytes_read);
                 do_read_header();
             }
+        } else if (ec == asio::error::eof) {
+            is_server_online_ = false;
         }
     };
 
@@ -118,6 +143,7 @@ void Connection::handle_new_message(MessageType type, size_t message_length) {
 }
 
 void Connection::close() {
+    socket_.shutdown(asio::ip::tcp::socket::shutdown_both);
     socket_.close();
 }
 
@@ -127,4 +153,8 @@ bool Connection::is_connected() const {
 
 const std::string& Connection::get_nick() const {
     return *nick_;
+}
+
+bool Connection::is_server_online() const {
+    return is_server_online_;
 }

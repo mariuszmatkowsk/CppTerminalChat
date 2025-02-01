@@ -15,8 +15,8 @@
 using namespace std::chrono_literals;
 
 namespace command {
-    constexpr const char* Connect{"connect"};
-    constexpr const char* Disconnect{"disconnect"};
+    constexpr const char* Join{"join"};
+    constexpr const char* Leave{"leave"};
     constexpr const char* PrivateMsg{"private"};
     constexpr const char* Help{"help"};
 } // namespace command
@@ -30,8 +30,8 @@ using ChatMessages = std::vector<ChatMessage>;
 using ChatUsers = std::vector<std::string>;
 
 std::tuple<std::string, std::string> parse_command(const std::string& input) {
-    std::string command;
-       
+    std::string command{};
+
     auto first_space_index = input.find_first_of(' ');
     if (first_space_index == std::string::npos) {
         return {input.substr(1, input.length() - 1), ""};
@@ -47,6 +47,9 @@ enum class ChatViewState {
     NotSupportedCommand,
     MissingCommandArgument,
     Help,
+    WrongCommandUsageAlreadyDisconnected,
+    WrongCommandUsageAlreadyConnected,
+    TryingJoinToOfflineServer,
 };
 
 void process_input(
@@ -57,15 +60,29 @@ void process_input(
         ChatViewState& chat_view_state) {
     if (input_text.starts_with('/')) {
         auto [command, rest] = parse_command(input_text);
-        if (command == command::Connect && !connection.is_connected()) {
-            const auto& nick = rest;
-            chat_users.push_back(nick);
-            connection.connect(nick);
-            chat_view_state = ChatViewState::Messages;
-        } else if (command == command::Disconnect && connection.is_connected()) {
-            connection.disconnect();
-            chat_users.clear();
-            chat_view_state = ChatViewState::Disconnected;
+        if (command == command::Join) {
+            if (connection.is_server_online()) {
+                if (!connection.is_connected()) {
+                    const auto& nick = rest;
+                    chat_users.push_back(nick);
+                    connection.join(nick);
+                    chat_view_state = ChatViewState::Messages;
+                } else {
+                    chat_view_state = ChatViewState::WrongCommandUsageAlreadyConnected;
+                    return;
+                }
+            } else {
+                chat_view_state = ChatViewState::TryingJoinToOfflineServer;
+            }
+        } else if (command == command::Leave) {
+            if (connection.is_connected()) {
+                connection.leave();
+                chat_users.clear();
+                chat_view_state = ChatViewState::Disconnected;
+            } else {
+                chat_view_state = ChatViewState::WrongCommandUsageAlreadyDisconnected;
+                return;
+            }
         } else if (command == command::Help) {
             chat_view_state = ChatViewState::Help;
         } else if (command == command::PrivateMsg && connection.is_connected()) {
@@ -97,7 +114,7 @@ void process_input(
     }
 }
 
-int main(int argc, char** argv) {
+int main(int, char**) {
     asio::io_context io_context{};
     asio::ip::tcp::resolver resolver{io_context};
     asio::ip::tcp::resolver::results_type endpoints{
@@ -163,8 +180,23 @@ int main(int argc, char** argv) {
                     ftxui::text("You are not connected to the server!!!") | ftxui::color(ftxui::Color::Red);
                 break;
             }
+            case ChatViewState::WrongCommandUsageAlreadyConnected: {
+                element = ftxui::text("You are already connected. Wrong command usage!!!") | ftxui::color(ftxui::Color::Red);
+                window_title = "Error:";
+                break;
+            }
+            case ChatViewState::WrongCommandUsageAlreadyDisconnected: {
+                element = ftxui::text("You are already disconnected. Wrong command usage!!!") | ftxui::color(ftxui::Color::Red);
+                window_title = "Error:";
+                break;
+            }
             case ChatViewState::NotSupportedCommand: {
                 element = ftxui::text("Command not supported.") | ftxui::color(ftxui::Color::Red);
+                window_title = "Error:";
+                break;
+            }
+            case ChatViewState::TryingJoinToOfflineServer: {
+                element = ftxui::text("Could not join to the chat. Server is offline.") | ftxui::color(ftxui::Color::Red);
                 window_title = "Error:";
                 break;
             }
@@ -183,11 +215,20 @@ int main(int argc, char** argv) {
                 std::move(element),
                 ftxui::emptyElement(),
                 ftxui::text("Usage:") | ftxui::bold,
-                ftxui::text("       /connect <nick>             - connect to the chat, set your nick"),
-                ftxui::text("       /disconnect                 - leave the chat"),
+                ftxui::text("       /join <nick>                - join the chat with nick"),
+                ftxui::text("       /leave                      - leave the chat"),
                 ftxui::text("       /private <nick> <message>   - send private message to other connected user"),
                 ftxui::text("       /help                       - show help")
         ));
+    });
+
+    auto server_status = ftxui::Renderer([&] {
+        auto status = connection.is_server_online()
+            ? ftxui::text("Online") | ftxui::color(ftxui::Color::Green)
+            : ftxui::text("Offline") | ftxui::color(ftxui::Color::Red);
+
+        return ftxui::window(ftxui::text("Server status:") | ftxui::bold | ftxui::center,
+            status | ftxui::center);
     });
 
     auto users = ftxui::Renderer([&] {
@@ -198,6 +239,10 @@ int main(int argc, char** argv) {
         return ftxui::window(ftxui::text("Chat users:") | ftxui::bold | ftxui::center,
             ftxui::vbox(std::move(elements))
         );
+    });
+
+    auto left_panel = ftxui::Renderer([&] {
+            return ftxui::vbox(server_status->Render(), users->Render() | ftxui::flex);
     });
 
     auto send_button = ftxui::Button("Send", [&] {
@@ -227,7 +272,7 @@ int main(int argc, char** argv) {
     int users_panel_size{30};
     int input_panel_size{3};
 
-    auto container = ftxui::ResizableSplitLeft(users, chat, &users_panel_size);
+    auto container = ftxui::ResizableSplitLeft(left_panel, chat, &users_panel_size);
     container = ftxui::ResizableSplitBottom(input_renderer, container, &input_panel_size);
 
     auto main_container = ftxui::Container::Vertical({
