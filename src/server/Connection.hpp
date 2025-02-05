@@ -33,6 +33,8 @@ private:
     void do_read_header();
     void do_read_body(MessageHeader header);
 
+    void do_send_chat_users();
+
     void broadcast_message(Message msg);
 
     void setup_dispatcher();

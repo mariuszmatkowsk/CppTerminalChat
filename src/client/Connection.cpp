@@ -13,22 +13,10 @@ Connection::Connection(asio::io_context& io_context,
       socket_(io_context_), received_messages_(received_messages),
       connect_timer_(io_context_), is_connected_(false),
       is_server_online_(false), nick_(std::nullopt) {
-    do_connect();
 }
 
-void Connection::do_connect() {
-    socket_.async_connect(*endpoints_.begin(), [this](asio::error_code ec) {
-        if (!ec) {
-            is_server_online_ = true;
-        } else {
-            connect_timer_.expires_after(1s);
-            connect_timer_.async_wait([this](asio::error_code ec) {
-                if (!ec) {
-                    do_connect();
-                }
-            });
-        }
-    });
+void Connection::connect() {
+    do_connect(false);
 }
 
 void Connection::join(std::string nick) {
@@ -81,6 +69,48 @@ void Connection::send(const Message& msg) {
     socket_.async_send(asio::buffer(*msg_to_send), handle_send);
 }
 
+void Connection::do_connect(const bool is_reconnection) {
+    socket_.async_connect(*endpoints_.begin(), [is_reconnection, this](asio::error_code ec) {
+        if (!ec) {
+            is_server_online_ = true;
+            if (is_reconnection && is_connected_ && nick_) {
+                join(*nick_);
+            }
+            check_connection();
+        } else {
+            connect_timer_.expires_after(1s);
+            connect_timer_.async_wait([this](asio::error_code ec) {
+                if (!ec && !is_server_online()) {
+                    do_connect(true);
+                }
+            });
+        }
+    });
+}
+
+void Connection::check_connection() {
+    auto serialized_ping_message = serialize(PingServerMessage{});
+    const auto ping_message =
+        std::make_shared<SerializedMessage>(serialized_ping_message);
+
+    socket_.async_send(
+        asio::buffer(*ping_message),
+        [ping_message, this](asio::error_code ec, size_t bytes) {
+            if (!ec) {
+                connect_timer_.expires_after(1s);
+                connect_timer_.async_wait([this](asio::error_code ec) {
+                    if (!ec) {
+                        check_connection();
+                    }
+                });
+            } else if (ec == asio::error::broken_pipe ||
+                       ec == asio::error::connection_reset) {
+                is_server_online_ = false;
+                do_connect();
+            }
+        });
+}
+
 void Connection::do_read_header() {
     auto handle_read = [this](asio::error_code ec, size_t bytes) {
         if (!ec && bytes == MessageHeaderSize) {
@@ -123,20 +153,21 @@ void Connection::do_read_body(MessageHeader header) {
 
 void Connection::handle_new_message(MessageType type, size_t message_length) {
     switch (type) {
-        case MessageType::Connect: {
-            append_new_message<ConnectMessage>(message_length);
-            break;
-        }
-        case MessageType::Disconnect: {
-            append_new_message<DisconnectMessage>(message_length);
-            break;
-        }
         case MessageType::Text: {
             append_new_message<TextMessage>(message_length);
             break;
         }
         case MessageType::PrivateMessage: {
             append_new_message<PrivateMessage>(message_length);
+            break;
+        }
+        case MessageType::ChatUsers: {
+            append_new_message<ChatUsersMessage>(message_length);
+            break;
+        }
+        case MessageType::PingServer:
+        case MessageType::Connect:
+        case MessageType::Disconnect: {
             break;
         }
     }

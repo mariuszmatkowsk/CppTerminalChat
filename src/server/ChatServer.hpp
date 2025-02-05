@@ -12,9 +12,11 @@ public:
 
     void start();
     void do_accept();
+    void do_await_stop();
 
 private:
     asio::io_context io_context_;
     asio::ip::tcp::acceptor acceptor_;
     ConnectionsManager connections_manager_;
+    asio::signal_set signals_;
 };

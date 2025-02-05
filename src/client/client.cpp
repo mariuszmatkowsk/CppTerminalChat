@@ -49,35 +49,28 @@ enum class ChatViewState {
     Help,
     WrongCommandUsageAlreadyDisconnected,
     WrongCommandUsageAlreadyConnected,
-    TryingJoinToOfflineServer,
+    ServerOffline,
 };
 
 void process_input(
         Connection& connection,
         ChatMessages& chat_messages,
-        ChatUsers& chat_users,
         std::string input_text,
         ChatViewState& chat_view_state) {
     if (input_text.starts_with('/')) {
         auto [command, rest] = parse_command(input_text);
         if (command == command::Join) {
-            if (connection.is_server_online()) {
-                if (!connection.is_connected()) {
-                    const auto& nick = rest;
-                    chat_users.push_back(nick);
-                    connection.join(nick);
-                    chat_view_state = ChatViewState::Messages;
-                } else {
-                    chat_view_state = ChatViewState::WrongCommandUsageAlreadyConnected;
-                    return;
-                }
+            if (!connection.is_connected()) {
+                const auto& nick = rest;
+                connection.join(nick);
+                chat_view_state = ChatViewState::Messages;
             } else {
-                chat_view_state = ChatViewState::TryingJoinToOfflineServer;
+                chat_view_state = ChatViewState::WrongCommandUsageAlreadyConnected;
+                return;
             }
         } else if (command == command::Leave) {
             if (connection.is_connected()) {
                 connection.leave();
-                chat_users.clear();
                 chat_view_state = ChatViewState::Disconnected;
             } else {
                 chat_view_state = ChatViewState::WrongCommandUsageAlreadyDisconnected;
@@ -123,6 +116,7 @@ int main(int, char**) {
     std::queue<Message> received_messages;
 
     Connection connection{io_context, std::move(endpoints), received_messages};
+    connection.connect();
     auto work_guard = asio::make_work_guard(io_context);
 
     asio::steady_timer pool_messages_timer(io_context);
@@ -137,12 +131,15 @@ int main(int, char**) {
     auto input_message =
         ftxui::Input(&input_text, "Type a message...") | ftxui::CatchEvent([&](ftxui::Event event) {
             if (event == ftxui::Event::Return && !input_text.empty()) {
-                process_input(
-                    connection,
-                    chat_messages,
-                    chat_users,
-                    std::move(input_text),
-                    chat_view_state);
+                if (connection.is_server_online()) {
+                    process_input(
+                        connection,
+                        chat_messages,
+                        std::move(input_text),
+                        chat_view_state);
+                } else {
+                    chat_view_state = ChatViewState::ServerOffline;
+                }
                 input_text.clear();
                 return true;
             }
@@ -195,8 +192,8 @@ int main(int, char**) {
                 window_title = "Error:";
                 break;
             }
-            case ChatViewState::TryingJoinToOfflineServer: {
-                element = ftxui::text("Could not join to the chat. Server is offline.") | ftxui::color(ftxui::Color::Red);
+            case ChatViewState::ServerOffline: {
+                element = ftxui::text("Server is offline.") | ftxui::color(ftxui::Color::Red);
                 window_title = "Error:";
                 break;
             }
@@ -247,12 +244,15 @@ int main(int, char**) {
 
     auto send_button = ftxui::Button("Send", [&] {
         if (!input_text.empty()) {
-            process_input(
-                connection,
-                chat_messages,
-                chat_users,
-                std::move(input_text),
-                chat_view_state);
+            if (connection.is_server_online()) {
+                process_input(
+                    connection,
+                    chat_messages,
+                    std::move(input_text),
+                    chat_view_state);
+            } else {
+                chat_view_state = ChatViewState::ServerOffline;
+            }
             input_text.clear();
         }
     });
@@ -269,10 +269,10 @@ int main(int, char**) {
         });
     });
 
-    int users_panel_size{30};
+    int left_panel_size{30};
     int input_panel_size{3};
 
-    auto container = ftxui::ResizableSplitLeft(left_panel, chat, &users_panel_size);
+    auto container = ftxui::ResizableSplitLeft(left_panel, chat, &left_panel_size);
     container = ftxui::ResizableSplitBottom(input_renderer, container, &input_panel_size);
 
     auto main_container = ftxui::Container::Vertical({
@@ -293,7 +293,7 @@ int main(int, char**) {
 
                 auto visitor = [&] <typename MsgType> (const MsgType& msg) {
                     if constexpr (std::is_same_v<MsgType, ConnectMessage>) {
-                        chat_users.push_back(msg.nick);
+                        // chat_users.push_back(msg.nick);
                     } else if constexpr (std::is_same_v<MsgType, TextMessage>) {
                         chat_messages.push_back({.nick = msg.from, .message = msg.message});
                     } else if constexpr (std::is_same_v<MsgType, PrivateMessage>) {
@@ -303,7 +303,9 @@ int main(int, char**) {
                         if (it != std::ranges::end(chat_users)) {
                             chat_users.erase(it);
                         }
-                    }  else {
+                    } else if constexpr (std::is_same_v<MsgType, ChatUsersMessage>) {
+                        chat_users = std::move(msg.users);
+                    } else {
                         chat_messages.push_back({.nick = "Not supported", .message = "Not supported"});
                     }
                 };

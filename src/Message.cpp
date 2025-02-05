@@ -67,8 +67,8 @@ bool deserialize(const SerializedMessage& buffer, DisconnectMessage& msg) {
 }
 
 SerializedMessage serialize(const TextMessage& msg) {
-    const auto from_length = msg.from.length();
-    const auto message_length = msg.message.length();
+    unsigned long from_length = msg.from.length();
+    unsigned long message_length = msg.message.length();
 
     constexpr size_t from_length_size = sizeof(from_length);
     constexpr size_t message_length_size = sizeof(message_length);
@@ -76,7 +76,7 @@ SerializedMessage serialize(const TextMessage& msg) {
     SerializedMessage buffer(from_length + message_length +
                                 from_length_size + message_length_size);
 
-    unsigned long offset{0};
+    unsigned offset{0};
     std::memcpy(buffer.data() + offset, &from_length, from_length_size);
     offset += from_length_size;
     std::memcpy(buffer.data() + offset, msg.from.data(), from_length);
@@ -89,8 +89,8 @@ SerializedMessage serialize(const TextMessage& msg) {
 }
 
 bool deserialize(const SerializedMessage& buffer, TextMessage& msg) {
-    unsigned from_length{0};
-    unsigned message_length{0};
+    unsigned long from_length{0};
+    unsigned long message_length{0};
 
     constexpr size_t from_length_size = sizeof(from_length);
     constexpr size_t message_length_size = sizeof(message_length);
@@ -114,9 +114,9 @@ bool deserialize(const SerializedMessage& buffer, TextMessage& msg) {
 }
 
 SerializedMessage serialize(const PrivateMessage& msg) {
-    const auto from_length = msg.from.length();
-    const auto to_length = msg.to.length();
-    const auto message_length = msg.message.length();
+    unsigned long from_length = msg.from.length();
+    unsigned long to_length = msg.to.length();
+    unsigned long message_length = msg.message.length();
 
     constexpr size_t from_length_size = sizeof(from_length);
     constexpr size_t to_length_size = sizeof(to_length);
@@ -126,7 +126,7 @@ SerializedMessage serialize(const PrivateMessage& msg) {
                                 to_length_size + from_length_size +
                                 message_length_size);
 
-    unsigned long offset{0};
+    unsigned offset{0};
     std::memcpy(buffer.data() + offset, &from_length, from_length_size);
     offset += from_length_size;
     std::memcpy(buffer.data() + offset, msg.from.data(), from_length);
@@ -143,9 +143,9 @@ SerializedMessage serialize(const PrivateMessage& msg) {
 }
 
 bool deserialize(const SerializedMessage& buffer, PrivateMessage& msg) {
-    unsigned from_length{0};
-    unsigned to_length{0};
-    unsigned message_length{0};
+    unsigned long from_length = msg.from.length();
+    unsigned long to_length = msg.to.length();
+    unsigned long message_length = msg.message.length();
 
     constexpr size_t from_length_size = sizeof(from_length);
     constexpr size_t to_length_size = sizeof(to_length);
@@ -173,12 +173,51 @@ bool deserialize(const SerializedMessage& buffer, PrivateMessage& msg) {
     return true;
 }
 
+SerializedMessage serialize(const ChatUsersMessage& msg) {
+    const auto users_count = msg.users.size();
+    unsigned long users_data_count{};
+    for (const auto& users : msg.users) {
+        users_data_count += users.length();
+    }
+
+    SerializedMessage buffer(users_count * sizeof(unsigned long) + users_data_count);
+
+    unsigned offset{0};
+    for (const auto& user : msg.users) {
+        unsigned long user_length = user.length();
+        constexpr size_t user_length_size = sizeof(user_length);
+        std::memcpy(buffer.data() + offset, &user_length, user_length_size);    
+        offset += user_length_size;
+        std::memcpy(buffer.data() + offset, user.data(), user_length);
+        offset += user_length;
+    }
+
+    return buffer;
+}
+
+bool deserialize(const SerializedMessage& buffer, ChatUsersMessage& msg) {
+    unsigned long user_length{0};
+    constexpr size_t user_length_size = sizeof(user_length);
+
+    unsigned offset{0};
+    while (offset < buffer.size()) {
+        std::memcpy(&user_length, buffer.data() + offset, user_length_size);
+        offset += user_length_size;
+        msg.users.emplace_back(buffer.begin() + offset, buffer.begin() + offset + user_length);
+        offset += user_length;
+    }
+
+    return true;
+}
+
 SerializedMessage serialize(const Message& msg) {
     MessageHeader header;
     SerializedMessage serialized_message;
 
-    auto visitor = [&serialized_message, &header]<typename MsgType>(const MsgType& message) {
-        serialized_message = serialize(message);
+    auto visitor = [&]<typename MsgType>(const MsgType& msg) {
+        if constexpr (!std::is_same_v<MsgType, PingServerMessage>) {
+            serialized_message = serialize(msg);
+        }
 
         MessageType type;
         if constexpr (std::is_same_v<MsgType, ConnectMessage>) {
@@ -189,6 +228,10 @@ SerializedMessage serialize(const Message& msg) {
             type = MessageType::Text;
         } else if constexpr (std::is_same_v<MsgType, PrivateMessage>) {
             type = MessageType::PrivateMessage;
+        } else if constexpr (std::is_same_v<MsgType, PingServerMessage>) {
+            type = MessageType::PingServer;
+        } else if constexpr (std::is_same_v<MsgType, ChatUsersMessage>) {
+            type = MessageType::ChatUsers;
         }
 
         header = {.type = std::move(type),

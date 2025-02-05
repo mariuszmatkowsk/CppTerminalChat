@@ -12,6 +12,8 @@ enum class MessageType {
     Disconnect,
     Text,
     PrivateMessage,
+    PingServer,
+    ChatUsers,
 };
 
 struct MessageHeader {
@@ -57,6 +59,15 @@ struct PrivateMessage {
 SerializedMessage serialize(const PrivateMessage& msg);
 bool deserialize(const SerializedMessage& buffer, PrivateMessage& msg);
 
-using Message = std::variant<ConnectMessage, TextMessage, DisconnectMessage, PrivateMessage>;
+struct PingServerMessage {};
+
+struct ChatUsersMessage {
+    std::vector<std::string> users;
+};
+
+SerializedMessage serialize(const ChatUsersMessage& msg);
+bool deserialize(const SerializedMessage& buffer, ChatUsersMessage& msg);
+
+using Message = std::variant<ConnectMessage, TextMessage, DisconnectMessage, PrivateMessage, PingServerMessage, ChatUsersMessage>;
 
 SerializedMessage serialize(const Message& msg);

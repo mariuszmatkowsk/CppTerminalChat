@@ -3,11 +3,8 @@
 #include "ConnectionsManager.hpp"
 
 #include <asio.hpp>
-#include <asio/completion_condition.hpp>
-#include <asio/error_code.hpp>
-#include <asio/steady_timer.hpp>
-#include <netinet/tcp.h>
 #include <print>
+#include <ranges>
 
 using namespace std::chrono_literals;
 
@@ -49,8 +46,24 @@ void Connection::do_read_header() {
             if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
                             header)) {
 
-                header.body_size > 0 ? do_read_body(std::move(header))
-                                     : do_read_header();
+                switch (header.type) {
+                    case MessageType::Text:
+                    case MessageType::Connect:
+                    case MessageType::Disconnect:
+                    case MessageType::PrivateMessage: {
+                        do_read_body(std::move(header));
+                        break;
+                    }
+                    case MessageType::PingServer: {
+                        do_read_header();
+                        break;
+                    }
+                    case MessageType::ChatUsers: {
+                        logger::error("Not supporter message type: ChatUsers");
+                        do_read_header();
+                        break;
+                    }
+                }
             } else {
                 logger::error("Could not deserialize MessageHeader");
             }
@@ -105,18 +118,50 @@ void Connection::do_read_body(MessageHeader header) {
                      handle_body_read);
 }
 
+void Connection::do_send_chat_users() {
+    timer_.expires_after(1s);
+    timer_.async_wait([self = shared_from_this(), this](asio::error_code ec) {
+        if (!ec) {
+            std::vector<std::string> users{};
+            if (connections_manager_.get_nick(self)) {
+                const auto& connections =
+                    connections_manager_.get_connections();
+
+                users = std::ranges::to<std::vector>(
+                    connections | std::views::values |
+                    std::views::filter(
+                        [](const auto& u) { return !u.empty(); }));
+            }
+
+            auto serialized_msg =
+                serialize(Message{ChatUsersMessage{.users = std::move(users)}});
+            auto msg_to_send =
+                std::make_shared<SerializedMessage>(serialized_msg);
+
+            socket_.async_send(
+                asio::buffer(*msg_to_send),
+                [self, this, msg_to_send](asio::error_code ec, size_t bytes) {
+                    if (!ec) {
+                        do_send_chat_users();
+                    }
+                });
+        }
+    });
+}
+
 void Connection::broadcast_message(Message msg) {
     const auto message_data =
         std::make_shared<SerializedMessage>(serialize(msg));
+    auto self = shared_from_this();
     for (auto& [connection, nick] : connections_manager_.get_connections()) {
-        if (connection == shared_from_this() || nick.empty()) {
+        if (connection == self || nick.empty()) {
             continue;
         }
 
         connection->get_socket().async_send(
             asio::buffer(*message_data),
-            [connection, message_data](asio::error_code ec, size_t bytes_send) {
-            });
+            [self, connection, message_data](asio::error_code ec,
+                                             size_t bytes_send) {});
     }
 }
 
@@ -149,20 +194,9 @@ void Connection::handle_connect_message(MessageHeader header,
 
             connections_manager_.set_nick(shared_from_this(),
                                           connect_message.nick);
-            logger::info(std::format("{} joined the chat.", connect_message.nick));
-            broadcast_message(connect_message);
-
-            for (const auto& [connection, nick] :
-                 connections_manager_.get_connections()) {
-                if (connection == shared_from_this() || nick.empty())
-                    continue;
-
-                auto nick_to_send = std::make_shared<SerializedMessage>(
-                    serialize(Message{ConnectMessage{.nick = nick}}));
-                socket_.async_send(asio::buffer(*nick_to_send),
-                                   [self = shared_from_this(),
-                                    nick_to_send](asio::error_code, size_t) {});
-            }
+            logger::info(
+                std::format("{} joined the chat.", connect_message.nick));
+            do_send_chat_users();
         } else {
             logger::error("Could not deserialize ConnectMessage");
         }
@@ -179,9 +213,9 @@ void Connection::handle_disconnect_message(MessageHeader header,
         DisconnectMessage disconnect_message;
         if (deserialize({buffer_.begin(), buffer_.begin() + bytes_read},
                         disconnect_message)) {
-            logger::info(std::format("{} left the chat.", disconnect_message.nick));
+            logger::info(
+                std::format("{} left the chat.", disconnect_message.nick));
             auto _ = connections_manager_.unset_nick(shared_from_this());
-            broadcast_message(disconnect_message);
         } else {
             logger::error("Could not deserialize DisconnectMessage");
         }

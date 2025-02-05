@@ -22,7 +22,7 @@ public:
         socket_.close();
     }
 
-    void do_connect();
+    void connect();
     void join(std::string nick);
     void leave();
     void close();
@@ -32,9 +32,12 @@ public:
     bool is_server_online() const;
 
 private:
+    void do_connect(const bool is_reconnection = false);
+    void check_connection();
     void do_read_header();
     void do_read_body(MessageHeader header);
     void handle_new_message(MessageType type, size_t message_length);
+
 
     template <typename Message>
     void append_new_message(size_t message_length) {

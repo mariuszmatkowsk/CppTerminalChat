@@ -26,16 +26,29 @@ public:
     }
 
     void set_nick(ConnectionPtr connection, std::string nick) {
-        if (auto it = connections_.find(connection); it != std::end(connections_)) {
+        if (auto it = connections_.find(connection);
+            it != std::end(connections_)) {
             connections_[connection] = nick;
         }
     }
 
     std::optional<std::string> unset_nick(ConnectionPtr connection) {
-        if (auto it = connections_.find(connection); it != std::end(connections_)) {
+        if (auto it = connections_.find(connection);
+            it != std::end(connections_)) {
             auto nick = std::move(connections_[connection]);
             connections_[connection].clear();
             return nick;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> get_nick(ConnectionPtr connection) {
+        auto it = connections_.find(connection);
+        if (it != std::end(connections_)) {
+            if (it->second.empty()) {
+                return std::nullopt;
+            }
+            return it->second;
         }
         return std::nullopt;
     }
@@ -44,10 +57,12 @@ public:
         return connections_;
     }
 
-    std::optional<const ConnectionPtr> get_connection_by_nick(const std::string& nick) {
-        auto it = std::ranges::find_if(connections_, [&nick] (const auto& connection) {
+    std::optional<const ConnectionPtr>
+    get_connection_by_nick(const std::string& nick) {
+        auto it =
+            std::ranges::find_if(connections_, [&nick](const auto& connection) {
                 return connection.second == nick;
-                });
+            });
         if (it != std::ranges::end(connections_)) {
             return it->first;
         }
